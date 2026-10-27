@@ -6,90 +6,92 @@ export interface RGB {
   b: number;
 }
 
-export interface HSV {
-  h: number; // 0..360
-  s: number; // 0..1
-  v: number; // 0..1
+export interface Lab {
+  L: number;
+  a: number;
+  b: number;
 }
 
 /**
- * Converts RGB [0..255] to HSV
+ * Converts sRGB [0..255] to CIE-L*a*b* color space.
+ * CIE-Lab is designed to approximate human vision:
+ * - L*: Lightness (0 = black, 100 = white)
+ * - a*: Green (-) to Red (+)
+ * - b*: Blue (-) to Yellow (+)
  */
-export function rgbToHsv(r: number, g: number, b: number): HSV {
-  r /= 255;
-  g /= 255;
-  b /= 255;
+export function rgbToLab(rgb: RGB): Lab {
+  let r = rgb.r / 255;
+  let g = rgb.g / 255;
+  let b = rgb.b / 255;
 
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const d = max - min;
+  // Inverse sRGB companding
+  r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
+  g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
+  b = b > 0.04045 ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
 
-  let h = 0;
-  const s = max === 0 ? 0 : d / max;
-  const v = max;
+  // Convert to CIE XYZ (D65 illuminant standard)
+  const x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047;
+  const y = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 1.00000;
+  const z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883;
 
-  if (max !== min) {
-    switch (max) {
-      case r:
-        h = (g - b) / d + (g < b ? 6 : 0);
-        break;
-      case g:
-        h = (b - r) / d + 2;
-        break;
-      case b:
-        h = (r - g) / d + 4;
-        break;
-    }
-    h /= 6;
-  }
+  const fx = x > 0.008856 ? Math.pow(x, 1 / 3) : (7.787 * x) + 16 / 116;
+  const fy = y > 0.008856 ? Math.pow(y, 1 / 3) : (7.787 * y) + 16 / 116;
+  const fz = z > 0.008856 ? Math.pow(z, 1 / 3) : (7.787 * z) + 16 / 116;
 
   return {
-    h: h * 360,
-    s,
-    v,
+    L: (116 * fy) - 16,
+    a: 500 * (fx - fy),
+    b: 200 * (fy - fz),
   };
 }
 
 /**
- * Classifies a raw RGB sample into one of the 6 Rubik's Cube faces:
- * U (White), R (Red), F (Green), D (Yellow), L (Orange), B (Blue).
- *
- * Uses Hue, Saturation, and Value thresholds to reliably distinguish:
- * - White: low saturation (s < 0.25) and high value (v > 0.40)
- * - Yellow: hue 42..75, high saturation
- * - Green: hue 75..165
- * - Blue: hue 170..260
- * - Orange: hue 10..42
- * - Red: hue > 340 or < 10
+ * CIE76 Delta-E perceptual color difference formula.
+ * Computes Euclidean distance in CIE-Lab color space.
  */
-export function classifyColorHSV(rgb: RGB): Face {
-  const { h, s, v } = rgbToHsv(rgb.r, rgb.g, rgb.b);
+export function deltaE(c1: Lab, c2: Lab): number {
+  return Math.sqrt(
+    Math.pow(c1.L - c2.L, 2) +
+    Math.pow(c1.a - c2.a, 2) +
+    Math.pow(c1.b - c2.b, 2)
+  );
+}
 
-  // 1. White detection: low color saturation and decent brightness
-  if (s < 0.28 && v > 0.35) {
-    return 'U';
+/**
+ * Standard reference colors in Lab space for typical Rubik's cubes under webcam lighting.
+ */
+export const DEFAULT_LAB_REFERENCES: Record<Face, Lab> = {
+  U: rgbToLab({ r: 240, g: 240, b: 245 }), // White: high L, near zero a & b
+  D: rgbToLab({ r: 235, g: 215, b: 20 }),  // Yellow: high L, negative a, strong positive b
+  R: rgbToLab({ r: 200, g: 25, b: 25 }),   // Red: moderate L, strong positive a, positive b
+  L: rgbToLab({ r: 245, g: 110, b: 20 }),  // Orange: moderate-high L, positive a, strong positive b
+  F: rgbToLab({ r: 20, g: 165, b: 45 }),   // Green: moderate L, strong negative a, moderate b
+  B: rgbToLab({ r: 15, g: 85, b: 205 }),   // Blue: moderate L, positive a, strong negative b
+};
+
+/**
+ * Classifies an RGB sample to the closest Rubik's Cube face using CIE-Lab Delta-E distance.
+ * If calibrated center references are available, it uses them for exact lighting matching.
+ */
+export function classifyColor(rgb: RGB, customReferences?: Partial<Record<Face, RGB>>): Face {
+  const sampleLab = rgbToLab(rgb);
+
+  let bestFace: Face = 'U';
+  let minDistance = Infinity;
+
+  const faces: Face[] = ['U', 'R', 'F', 'D', 'L', 'B'];
+
+  for (const face of faces) {
+    const targetLab = customReferences?.[face]
+      ? rgbToLab(customReferences[face]!)
+      : DEFAULT_LAB_REFERENCES[face];
+
+    const dist = deltaE(sampleLab, targetLab);
+    if (dist < minDistance) {
+      minDistance = dist;
+      bestFace = face;
+    }
   }
 
-  // 2. High brightness yellow check (sometimes washed out)
-  if (h >= 45 && h <= 75) {
-    return 'D'; // Yellow
-  }
-
-  // 3. Green
-  if (h > 75 && h <= 165) {
-    return 'F'; // Green
-  }
-
-  // 4. Blue
-  if (h > 165 && h <= 265) {
-    return 'B'; // Blue
-  }
-
-  // 5. Orange vs Red
-  if (h > 12 && h < 45) {
-    return 'L'; // Orange
-  }
-
-  // 6. Red (wraps around 0/360 degrees)
-  return 'R'; // Red
+  return bestFace;
 }
