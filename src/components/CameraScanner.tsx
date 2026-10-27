@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Face, FaceletState } from '../core/types';
 import { classifyColor, RGB } from '../core/colorClassifier';
 import { COLOR_HEX, COLOR_NAMES } from './CubeNetEditor';
+import { sound } from '../utils/audio';
 import {
   Camera,
   RotateCcw,
@@ -9,6 +10,9 @@ import {
   VideoOff,
   Sun,
   Palette,
+  Sparkles,
+  FlipHorizontal,
+  Info,
 } from 'lucide-react';
 
 interface CameraScannerProps {
@@ -29,6 +33,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [currentFaceIndex, setCurrentFaceIndex] = useState<number>(0);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isMirrored, setIsMirrored] = useState<boolean>(true);
 
   // Live real-time colors detected in the video stream
   const [liveColors, setLiveColors] = useState<Face[]>(Array(9).fill('U'));
@@ -48,6 +53,10 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
   // Preview of currently captured face
   const [previewFace, setPreviewFace] = useState<Face[] | null>(null);
+
+  // Manual editing: which color is currently selected in the paint palette
+  const [activePaintColor, setActivePaintColor] = useState<Face>('U');
+  const [selectedTileIdx, setSelectedTileIdx] = useState<number | null>(null);
 
   const currentFace = SCAN_ORDER[currentFaceIndex];
 
@@ -142,10 +151,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     canvas.width = video.videoWidth || 640;
     canvas.height = video.videoHeight || 480;
 
-    // Draw MIRRORED to match user display
     ctx.save();
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
+    if (isMirrored) {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     ctx.restore();
 
@@ -160,7 +170,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     for (let row = 0; row < 3; row++) {
       for (let col = 0; col < 3; col++) {
         if (row === 1 && col === 1) {
-          detected.push(currentFace); // center piece is fixed reference
+          detected.push(currentFace); // Center piece is fixed reference
         } else {
           const rgb = sampleCellRGB(ctx, startX, startY, cellSize, row, col);
           const face = classifyColor(rgb, centerCalibrations);
@@ -170,16 +180,17 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     }
 
     setLiveColors(detected);
-  }, [currentFace, centerCalibrations]);
+  }, [currentFace, centerCalibrations, isMirrored]);
 
   useEffect(() => {
-    if (previewFace) return; // Stop live loop while inspecting preview
-    const interval = setInterval(sampleLiveFrame, 150); // Sample every 150ms
+    if (previewFace) return;
+    const interval = setInterval(sampleLiveFrame, 150);
     return () => clearInterval(interval);
   }, [sampleLiveFrame, previewFace]);
 
   // Capture current frame
   const handleCapture = () => {
+    sound.playSnap();
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
@@ -190,10 +201,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     canvas.width = video.videoWidth || 640;
     canvas.height = video.videoHeight || 480;
 
-    // CRITICAL: Draw horizontally mirrored so left/right matches screen!
     ctx.save();
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
+    if (isMirrored) {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     ctx.restore();
 
@@ -205,7 +217,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
     const detected: Face[] = [];
 
-    // Also calibrate the center piece RGB to adapt to current lighting!
+    // Calibrate the center piece RGB to adapt to current lighting
     const centerRGB = sampleCellRGB(ctx, startX, startY, cellSize, 1, 1);
     setCenterCalibrations((prev) => ({
       ...prev,
@@ -228,23 +240,24 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     }
 
     setPreviewFace(detected);
+    setSelectedTileIdx(null);
   };
 
-  // Allow user to tap any tile on the preview to cycle colors if slightly off
-  const handleCyclePreviewTile = (index: number) => {
-    if (!previewFace || index === 4) return; // Center is locked
-
-    const currentColor = previewFace[index];
-    const currentIdx = ALL_FACES.indexOf(currentColor);
-    const nextColor = ALL_FACES[(currentIdx + 1) % ALL_FACES.length];
+  // Manual Color Painting on Captured Face:
+  // If user clicks a tile, paint it with the active palette color
+  const handleTilePaint = (index: number) => {
+    if (!previewFace || index === 4) return; // Center piece is locked
+    sound.playTurn();
 
     const updated = [...previewFace];
-    updated[index] = nextColor;
+    updated[index] = activePaintColor;
     setPreviewFace(updated);
+    setSelectedTileIdx(index);
   };
 
   const handleConfirmFace = () => {
     if (!previewFace) return;
+    sound.playTurn();
 
     const updated = {
       ...scannedFaces,
@@ -252,6 +265,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     };
     setScannedFaces(updated);
     setPreviewFace(null);
+    setSelectedTileIdx(null);
 
     if (currentFaceIndex < SCAN_ORDER.length - 1) {
       setCurrentFaceIndex(currentFaceIndex + 1);
@@ -272,29 +286,54 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
   const handleRetake = () => {
     setPreviewFace(null);
+    setSelectedTileIdx(null);
   };
 
   return (
-    <div className="bg-slate-900 rounded-2xl border border-slate-800 p-4 sm:p-6 shadow-2xl backdrop-blur flex flex-col gap-4">
+    <div className="bg-slate-900/95 rounded-3xl border border-indigo-500/20 p-5 sm:p-7 shadow-2xl shadow-indigo-950/40 backdrop-blur-xl flex flex-col gap-4 relative overflow-hidden">
+      {/* Decorative ambient gradient backdrop */}
+      <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-0 left-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+
       {/* Hidden processing canvas */}
       <canvas ref={canvasRef} className="hidden" />
 
       {/* Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-        <div className="flex items-center gap-2">
-          <Camera className="w-5 h-5 text-indigo-400" />
-          <h2 className="font-bold text-white text-base">Guided Webcam Scanner</h2>
+      <div className="flex items-center justify-between pb-3 border-b border-slate-800 relative z-10">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
+            <Camera className="w-4 h-4" />
+          </div>
+          <div>
+            <h2 className="font-extrabold text-white text-base tracking-tight flex items-center gap-2">
+              <span>Webcam Scanner</span>
+              <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                AI Vision + Manual Override
+              </span>
+            </h2>
+          </div>
         </div>
-        <button
-          onClick={onCancel}
-          className="text-xs text-slate-400 hover:text-slate-200 transition"
-        >
-          Close Scanner
-        </button>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsMirrored(!isMirrored)}
+            className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
+            title="Toggle camera mirror mode"
+          >
+            <FlipHorizontal className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="hidden sm:inline">Flip</span>
+          </button>
+          <button
+            onClick={onCancel}
+            className="text-xs text-slate-400 hover:text-slate-200 px-2 py-1 rounded-lg hover:bg-slate-800 transition"
+          >
+            Close
+          </button>
+        </div>
       </div>
 
       {/* Stepper indicator for 6 faces */}
-      <div className="flex items-center justify-between gap-1 overflow-x-auto py-1">
+      <div className="flex items-center justify-between gap-1.5 overflow-x-auto py-1 relative z-10">
         {SCAN_ORDER.map((face, idx) => {
           const isDone = scannedFaces[face] !== null;
           const isCurrent = idx === currentFaceIndex;
@@ -302,27 +341,27 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           return (
             <div
               key={face}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
                 isCurrent
-                  ? 'bg-indigo-600/30 border-indigo-500 text-indigo-300 ring-2 ring-indigo-500/30'
+                  ? 'bg-gradient-to-r from-indigo-600/30 to-violet-600/30 border-indigo-500 text-indigo-300 ring-2 ring-indigo-500/30 scale-105 shadow-lg'
                   : isDone
                   ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400'
-                  : 'bg-slate-950/40 border-slate-800 text-slate-500'
+                  : 'bg-slate-950/40 border-slate-800/80 text-slate-500'
               }`}
             >
               <span
-                className="w-2.5 h-2.5 rounded-full border border-black/40"
+                className="w-2.5 h-2.5 rounded-full border border-black/40 shadow-sm"
                 style={{ backgroundColor: COLOR_HEX[face] }}
               />
               <span>{face}</span>
-              {isDone && <Check className="w-3 h-3 text-emerald-400" />}
+              {isDone && <Check className="w-3.5 h-3.5 text-emerald-400 stroke-[3]" />}
             </div>
           );
         })}
       </div>
 
       {/* Instruction Banner */}
-      <div className="bg-slate-950/80 rounded-xl p-3 border border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+      <div className="bg-slate-950/70 rounded-2xl p-3.5 border border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs relative z-10">
         <div>
           <span className="text-slate-400">Step {currentFaceIndex + 1} of 6: </span>
           <span className="font-bold text-white">
@@ -331,12 +370,12 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         </div>
         <div className="flex items-center gap-1.5 text-slate-400 text-[11px]">
           <Sun className="w-3.5 h-3.5 text-amber-400" />
-          <span>Hold cube flat under even lighting, avoid glare</span>
+          <span>Keep cube parallel to camera under clean lighting</span>
         </div>
       </div>
 
-      {/* Video Viewport with Mirrored Feed & Interactive 3x3 Overlay */}
-      <div className="relative w-full aspect-[4/3] bg-black rounded-xl overflow-hidden border border-slate-800 flex items-center justify-center">
+      {/* Video Viewport with Live Targeting Reticle */}
+      <div className="relative w-full aspect-[4/3] bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl flex items-center justify-center">
         {hasPermission === false ? (
           <div className="p-6 text-center flex flex-col items-center gap-2 max-w-sm">
             <VideoOff className="w-8 h-8 text-rose-400" />
@@ -350,12 +389,12 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               autoPlay
               playsInline
               muted
-              className="w-full h-full object-cover transform -scale-x-100"
+              className={`w-full h-full object-cover ${isMirrored ? 'transform -scale-x-100' : ''}`}
             />
 
             {/* 3x3 Target Reticle Overlay with LIVE Color Dots */}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="w-[55%] aspect-square grid grid-cols-3 grid-rows-3 gap-1.5 p-2 rounded-xl border-2 border-dashed border-indigo-400/90 bg-black/20 backdrop-blur-[1px]">
+              <div className="w-[55%] aspect-square grid grid-cols-3 grid-rows-3 gap-2 p-2.5 rounded-2xl border-2 border-dashed border-indigo-400/90 bg-black/25 backdrop-blur-[2px] shadow-2xl">
                 {Array.from({ length: 9 }).map((_, i) => {
                   const detectedColor = liveColors[i] || 'U';
                   const isCenter = i === 4;
@@ -363,19 +402,19 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                   return (
                     <div
                       key={i}
-                      className={`rounded-lg border flex flex-col items-center justify-center relative transition-colors ${
+                      className={`rounded-xl border flex flex-col items-center justify-center relative transition-all ${
                         isCenter
-                          ? 'border-emerald-400 bg-emerald-500/20'
-                          : 'border-white/50 bg-black/30'
+                          ? 'border-emerald-400/80 bg-emerald-500/25 shadow-lg shadow-emerald-500/20'
+                          : 'border-white/40 bg-black/40'
                       }`}
                     >
-                      {/* Live color preview indicator dot */}
+                      {/* Live color indicator badge */}
                       <span
                         className="w-4 h-4 rounded-full border border-black/50 shadow-md transition-colors"
                         style={{ backgroundColor: COLOR_HEX[detectedColor] }}
                       />
                       {isCenter && (
-                        <span className="text-[9px] font-bold text-emerald-300 uppercase mt-0.5">
+                        <span className="text-[9px] font-bold text-emerald-300 uppercase mt-0.5 tracking-wider">
                           Center
                         </span>
                       )}
@@ -388,54 +427,109 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         )}
       </div>
 
-      {/* Preview Dialog / Capture Button */}
+      {/* Preview Dialog with FULL MANUAL COLOR EDITING */}
       {previewFace ? (
-        <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-              <Palette className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Verify Captured Colors:</span>
+        <div className="bg-slate-950/90 p-4 sm:p-5 rounded-2xl border border-indigo-500/30 flex flex-col gap-4 shadow-xl relative z-10 animate-in fade-in zoom-in-95 duration-200">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+            <span className="text-xs font-bold text-white flex items-center gap-1.5">
+              <Palette className="w-4 h-4 text-indigo-400" />
+              <span>Verify & Edit Captured Face:</span>
             </span>
-            <span className="text-[11px] text-indigo-400 font-medium">
-              💡 Click any tile below to change color if misidentified!
+            <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
+              <Sparkles className="w-3 h-3" />
+              <span>Tap any tile below to paint it!</span>
             </span>
           </div>
 
-          <div className="flex justify-center">
-            <div className="grid grid-cols-3 gap-1.5 p-2 bg-slate-900 rounded-xl border border-slate-800">
-              {previewFace.map((f, idx) => {
-                const isCenter = idx === 4;
-                return (
-                  <button
-                    key={idx}
-                    onClick={() => handleCyclePreviewTile(idx)}
-                    disabled={isCenter}
-                    title={isCenter ? 'Center piece (Fixed)' : 'Click to cycle color'}
-                    style={{ backgroundColor: COLOR_HEX[f] }}
-                    className={`w-9 h-9 rounded-lg border border-black/40 shadow-sm transition active:scale-95 flex items-center justify-center text-[10px] font-bold text-slate-900 ${
-                      isCenter ? 'opacity-90 cursor-not-allowed ring-2 ring-emerald-400' : 'hover:scale-105 cursor-pointer'
-                    }`}
-                  >
-                    {isCenter && <span className="opacity-70 text-[9px]">{f}</span>}
-                  </button>
-                );
-              })}
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
+            {/* The 3x3 Captured Grid */}
+            <div className="flex flex-col items-center">
+              <div className="grid grid-cols-3 gap-2 p-2.5 bg-slate-900 rounded-2xl border border-slate-800 shadow-inner">
+                {previewFace.map((f, idx) => {
+                  const isCenter = idx === 4;
+                  const isSelected = selectedTileIdx === idx;
+
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => handleTilePaint(idx)}
+                      disabled={isCenter}
+                      title={isCenter ? 'Fixed Center' : `Tap to paint with ${COLOR_NAMES[activePaintColor]}`}
+                      style={{ backgroundColor: COLOR_HEX[f] }}
+                      className={`w-11 h-11 rounded-xl border border-black/40 shadow-md transition-all active:scale-95 flex items-center justify-center font-bold text-xs text-slate-900 ${
+                        isCenter
+                          ? 'opacity-90 cursor-not-allowed ring-2 ring-emerald-400'
+                          : isSelected
+                          ? 'ring-4 ring-indigo-400 scale-105 z-10'
+                          : 'hover:scale-105 hover:brightness-110 cursor-pointer'
+                      }`}
+                    >
+                      {isCenter ? (
+                        <span className="text-[10px] uppercase font-mono">{f}</span>
+                      ) : (
+                        <span className="opacity-70 text-[9px] uppercase font-mono">{f}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="text-[10px] text-slate-400 mt-1.5">Face: {COLOR_NAMES[currentFace]}</span>
+            </div>
+
+            {/* Manual Color Paint Palette */}
+            <div className="flex flex-col gap-2 p-3 bg-slate-900/80 rounded-2xl border border-slate-800 w-full sm:w-auto">
+              <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                <Palette className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Select Color to Paint:</span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                {ALL_FACES.map((f) => {
+                  const isSelected = activePaintColor === f;
+                  return (
+                    <button
+                      key={f}
+                      onClick={() => {
+                        sound.playTurn();
+                        setActivePaintColor(f);
+                      }}
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition ${
+                        isSelected
+                          ? 'ring-2 ring-indigo-400 border-indigo-400 bg-slate-800 scale-105 font-bold shadow'
+                          : 'border-slate-700/60 bg-slate-950/60 hover:bg-slate-800 text-slate-300'
+                      }`}
+                    >
+                      <span
+                        className="w-3.5 h-3.5 rounded-[4px] border border-black/40 shadow-sm"
+                        style={{ backgroundColor: COLOR_HEX[f] }}
+                      />
+                      <span className="text-[11px] font-medium">{f}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-1 pt-2 border-t border-slate-800/80 text-[11px] text-slate-400 flex items-center gap-1">
+                <Info className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span>Pick color, then tap any tile to correct it!</span>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 pt-1">
+          {/* Action Buttons */}
+          <div className="flex items-center gap-3 pt-2">
             <button
               onClick={handleRetake}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 transition"
+              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 transition"
             >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Retake</span>
+              <RotateCcw className="w-4 h-4" />
+              <span>Retake Photo</span>
             </button>
             <button
               onClick={handleConfirmFace}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shadow-lg shadow-emerald-600/30 transition"
+              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-xs font-extrabold text-slate-950 shadow-lg shadow-emerald-500/30 transition active:scale-95"
             >
-              <Check className="w-3.5 h-3.5" />
+              <Check className="w-4 h-4 stroke-[3]" />
               <span>{currentFaceIndex === 5 ? 'Finish & Open Solver' : 'Confirm Face'}</span>
             </button>
           </div>
@@ -444,7 +538,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         <button
           onClick={handleCapture}
           disabled={hasPermission !== true}
-          className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed text-white font-bold text-sm shadow-lg shadow-indigo-600/30 transition active:scale-95"
+          className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed text-white font-extrabold text-sm shadow-xl shadow-indigo-600/30 transition active:scale-95 relative z-10"
         >
           <Camera className="w-4 h-4" />
           <span>Capture Face ({currentFace})</span>

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Move } from '../core/types';
+import { sound } from '../utils/audio';
 import {
   Play,
   Pause,
@@ -110,7 +111,10 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
       {/* Navigation Controls Bar */}
       <div className="pt-3 border-t border-slate-800 flex items-center justify-center gap-2 sm:gap-3">
         <button
-          onClick={() => onStepChange(0)}
+          onClick={() => {
+            sound.playTurn();
+            onStepChange(0);
+          }}
           disabled={currentStep === 0}
           className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed transition"
           title="Jump to Start"
@@ -119,7 +123,10 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
         </button>
 
         <button
-          onClick={() => onStepChange(Math.max(0, currentStep - 1))}
+          onClick={() => {
+            sound.playTurn();
+            onStepChange(Math.max(0, currentStep - 1));
+          }}
           disabled={currentStep === 0}
           className="flex items-center gap-1 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition"
         >
@@ -145,7 +152,10 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
         </button>
 
         <button
-          onClick={() => onStepChange(Math.min(totalSteps, currentStep + 1))}
+          onClick={() => {
+            sound.playTurn();
+            onStepChange(Math.min(totalSteps, currentStep + 1));
+          }}
           disabled={currentStep === totalSteps}
           className="flex items-center gap-1 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition"
         >
@@ -154,7 +164,10 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
         </button>
 
         <button
-          onClick={() => onStepChange(totalSteps)}
+          onClick={() => {
+            sound.playTurn();
+            onStepChange(totalSteps);
+          }}
           disabled={currentStep === totalSteps}
           className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed transition"
           title="Jump to Solved State"
