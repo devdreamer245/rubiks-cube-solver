@@ -1,5 +1,5 @@
 import Cube from 'cubejs';
-import { Face, FaceletState, Move } from './types';
+import { FaceletState, Move } from './types';
 
 /**
  * Creates a brand new solved 54-facelet cube state.

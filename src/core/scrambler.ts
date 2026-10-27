@@ -1,5 +1,5 @@
-import { Move, ALL_MOVES, Face } from './types';
-import { FaceletState, getSolvedCube, applyMoves } from './cube';
+import { Move, Face, FaceletState } from './types';
+import { getSolvedCube, applyMoves } from './cube';
 
 const OPPOSITE_FACES: Record<Face, Face> = {
   U: 'D',
@@ -10,12 +10,6 @@ const OPPOSITE_FACES: Record<Face, Face> = {
   B: 'F',
 };
 
-const AXIS_FACES: Face[][] = [
-  ['U', 'D'],
-  ['L', 'R'],
-  ['F', 'B'],
-];
-
 const MODIFIERS = ['', "'", '2'] as const;
 
 /**
@@ -23,9 +17,6 @@ const MODIFIERS = ['', "'", '2'] as const;
  * Enforces speedcubing scramble rules:
  * 1. Consecutive moves on the same face are prohibited (e.g. no "R R").
  * 2. Consecutive moves on opposite faces cannot cancel/commute redundantly (e.g. no "R L R").
- *
- * @param length - Scramble length (standard WCA 3x3 is typically 20-25 moves, default 20)
- * @returns Array of valid Move strings
  */
 export function generateScramble(length: number = 20): Move[] {
   const scramble: Move[] = [];
